@@ -1,0 +1,10 @@
+kmlmod
+======
+
+Google Earth KML file modifier
+
+kmlmod is designed to modify the coordinates contained within a Google Earth
+route file.  It's output can be a list of coordinates suitable for insertion
+into a kml file or an entire file.  Regardless of format, the output is always
+written to stdout.
+

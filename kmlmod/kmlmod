@@ -1,0 +1,173 @@
+#!/usr/bin/python
+#
+# vim: tabstop=4 expandtab shiftwidth=4 noautoindent
+#
+# nymserv.py - A Basic Nymserver for delivering messages to a shared mailbox
+# such as alt.anonymous.messages.
+#
+# Copyright (C) 2012 Steve Crook <steve@mixmin.net>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3, or (at your option) any later
+# version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTIBILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import sys
+import os.path
+import argparse
+
+
+def reconstruct(filename, coords):
+    """This function takes a kml filename and a list of coordinates as input.
+       Output is the file, with coordinates replaced by those in the list,
+       written to stdout.
+    """
+    f = open(filename, 'r')
+    coords_insert = False
+    for line in f:
+        if coords_insert:
+            sys.stdout.write("\t" * (tabs + 1))
+            sys.stdout.write(" ".join(coords) + " \n")
+            coords_insert = False
+        else:
+            sys.stdout.write(line)
+        if line.strip().lower() == '<coordinates>':
+            tabs = len(line) - len(line.lstrip('\t'))
+            coords_insert = True
+
+def find_deviation(coords, xdev, ydev):
+    deviations = []
+    for n in range(len(coords)):
+        if coords[n].count(",") != 2:
+            sys.stderr.write("%s: Malformed coordinate found at position "
+                             "%s\n" % coords[n])
+            sys.exit(1)
+        x, y, z = coords[n].split(",")
+        x = float(x)
+        y = float(y)
+        if n == 0:
+            last_x = x
+            last_y = y
+            continue
+        if abs(x - last_x) > xdev:
+            deviations.append(n)
+        if abs(y - last_y) > ydev:
+            deviations.append(n)
+        last_x = x
+        last_y = y
+    if len(deviations) == 0:
+        sys.stderr.write("Sufficient deviation not found\n")
+        sys.exit(1)
+    return deviations
+
+def dms2deg(degstr):
+    if degstr.endswith('s'):
+        return float(degstr[:-1]) / 3600
+    if degstr.endswith('m'):
+        return float(degstr[:-1]) / 60
+    if degstr.endswith('d'):
+        return float(degstr[:-1])
+    return float(degstr)
+
+
+parser = argparse.ArgumentParser(description='KML Coordinate Modifier')
+parser.add_argument('filename', type=str, help="Input KML file")
+parser.add_argument('--xdev', type=str, help='x deviation')
+parser.add_argument('--ydev', type=str, help='y deviation')
+parser.add_argument('--xadd', type=str, help='x increment')
+parser.add_argument('--yadd', type=str, help='y increment')
+parser.add_argument('--find', action="store_true", help="Find coordinate")
+parser.add_argument('--reconstruct', action="store_true",
+                     help="Output in KML file format")
+parser.add_argument('--reverse', action="store_true", help="Reverse route")
+parser.add_argument('--cutfrom', type=int,
+                     help="Cut from a coordinate reference")
+parser.add_argument('--cutto', type=int,
+                     help="Cut to a coordinate reference")
+args = parser.parse_args()
+
+if not os.path.isfile(args.filename):
+    sys.stderr.write("%s: No such file\n" % args.filename)
+    sys.exit(1)
+inlines = [line.lower().strip() for line in open(args.filename, 'r')]
+try:
+    start = inlines.index('<coordinates>')
+except ValueError:
+    sys.stderr.write("No <coordinates> header found\n")
+    sys.exit(1)
+try:
+    end = inlines.index('</coordinates>')
+except ValueError:
+    sys.stderr.write("No </coordinates> header found\n")
+    sys.exit(1)
+if (start + 1) != (end - 1):
+    sys.stderr.write("Invalid KML file")
+    sys.exit(1)
+coords = inlines[start + 1].split(' ')
+if args.find:
+    if args.reconstruct:
+        sys.stderr.write("Find mode is incompatible with reconstruct mode\n")
+        sys.exit(1)
+    if args.xadd or args.yadd or args.reverse:
+        sys.stderr.write("Find mode is incompatible with coordinate "
+                         "modifiers\n")
+        sys.exit(1)
+    if not args.xdev and not args.ydev:
+        sys.stderr.write("Find requires xdev and/or ydev parameters\n")
+        sys.exit(1)
+    xdev = 360
+    ydev = 360
+    if args.xdev:
+        xdev = dms2deg(args.xdev)
+    if args.ydev:
+        ydev = dms2deg(args.ydev)
+    sys.stdout.write(", ".join(map(str, find_deviation(coords, xdev, ydev)))
+                     + "\n")
+    sys.exit(0)
+
+if args.xadd or args.yadd:
+    xdeg = 0
+    ydeg = 0
+    if args.xadd:
+        xdeg = dms2deg(args.xadd)
+    if args.yadd:
+        ydeg = dms2deg(args.yadd)
+    for c in range(len(coords)):
+        x, y, z = coords[c].split(",")
+        x = float(x)
+        y = float(y)
+        x = x + xdeg
+        y = y + ydeg
+        newcoord = "%s,%s,%s" % (x, y, z)
+        coords[c] = newcoord
+
+if args.cutfrom:
+    if args.cutfrom < 0 or args.cutfrom > len(coords):
+        sys.stderr.write("Argument cutfrom must be in range 0-%s\n"
+                         % len(coords))
+        sys.exit(1)
+    coords = coords[args.cutfrom:]
+if args.cutto:
+    if args.cutto < 0 or args.cutto > len(coords):
+        sys.stderr.write("Argument cutto must be in range 0-%s\n"
+                         % len(coords))
+        sys.exit(1)
+    coords = coords[:args.cutto]
+if args.reverse:
+    coords.reverse()
+
+# If the reconstruct flag is set, output will be in a full KML format, based
+# on the original input file.  Otherwise, only the coordinates will be written
+# to stdout.
+if args.reconstruct:
+    reconstruct(args.filename, coords)
+else:
+    sys.stdout.write(" ".join(coords) + " \n")
